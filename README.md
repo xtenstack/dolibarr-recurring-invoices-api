@@ -8,7 +8,7 @@ A lightweight, native Dolibarr ERP/CRM module that exposes REST API endpoints fo
 
 In standard Dolibarr ERP/CRM (v18 through v24+), the core REST API provides `GET /invoices/templates` to read recurring templates, but **completely lacks a `POST` endpoint to create recurring invoice templates programmatically**.
 
-This module solves that gap by providing first-class REST API endpoints that plug directly into Dolibarr's native Luracast Restler engine (`/api/index.php`). It uses Dolibarr's internal `FactureRec` and `FactureRecLigne` classes to ensure full fidelity with tax rules, discounts, line items, project linkages, extrafields, and auto-validation settings.
+This module solves that gap by providing first-class REST API endpoints that plug directly into Dolibarr's native Luracast Restler engine (`/api/index.php`). It uses Dolibarr's own `FactureRec::create()`, which copies the customer and every line from the source invoice, so tax rules, discounts, line items, project linkage, extrafields and auto-validation settings carry over exactly as Dolibarr's own "convert to recurring" screen does.
 
 ---
 
@@ -24,7 +24,7 @@ This module solves that gap by providing first-class REST API endpoints that plu
 
 ## Compatibility
 
-- Dolibarr v18.x, v19.x, v20.x, v21.x, v22.x, v23.x, v24+
+- Checked against Dolibarr 23.0 source (the target install runs 23.0.3); older releases are supported via a fallback include path but untested
 - PHP 7.4, 8.0, 8.1, 8.2, 8.3+
 
 ---
@@ -32,9 +32,9 @@ This module solves that gap by providing first-class REST API endpoints that plu
 ## Installation
 
 ### Method 1: Upload via Dolibarr Web Interface (Recommended)
-1. Download `dolirecurringapi.zip` from the Releases page.
+1. Build `dolirecurringapi-1.0.0.zip` with `scripts/package.sh` (Dolibarr's installer requires the `modulename-x.y.z.zip` name).
 2. In Dolibarr, go to **Home → Setup → Modules/Applications → Deploy/install external module**.
-3. Upload `dolirecurringapi.zip` and click **Install**.
+3. Upload `dolirecurringapi-1.0.0.zip` and click **Install**.
 4. In the **Financial Modules** section, locate **DoliRecurringApi** and toggle it to **ON**.
 
 ### Method 2: Manual Installation via Filesystem / SSH
