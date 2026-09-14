@@ -15,7 +15,12 @@
 use Luracast\Restler\RestException;
 
 require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture.class.php';
-require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facturerec.class.php';
+// Renamed facturerec.class.php -> facture-rec.class.php in newer Dolibarr releases.
+if (file_exists(DOL_DOCUMENT_ROOT . '/compta/facture/class/facture-rec.class.php')) {
+    require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facture-rec.class.php';
+} else {
+    require_once DOL_DOCUMENT_ROOT . '/compta/facture/class/facturerec.class.php';
+}
 
 /**
  * API class for recurring invoices (FactureRec)
@@ -32,7 +37,7 @@ class DoliRecurringApi extends DolibarrApi
      */
     public static $FIELDS = array(
         'id',
-        'titre',
+        'title',
         'socid',
         'total_ht',
         'total_tva',
@@ -147,10 +152,12 @@ class DoliRecurringApi extends DolibarrApi
 
         $facturerec = new FactureRec($this->db);
 
-        // Header mapping from source invoice
-        $facturerec->socid             = $facture->socid;
+        // FactureRec::create($user, $facid) copies the customer and every line
+        // (products, qty, prices, taxes, discounts) from the source invoice
+        // itself, so only the template's own settings are set here.
+        $facturerec->title             = !empty($title) ? $title : ($facture->ref . ' - Recurring');
+        $facturerec->titre             = $facturerec->title; // deprecated alias, still read by older releases
         $facturerec->fk_project        = $facture->fk_project;
-        $facturerec->titre             = !empty($title) ? $title : ($facture->ref . ' - Recurring');
         $facturerec->frequency         = (int) $frequency > 0 ? (int) $frequency : 1;
         $facturerec->unit_frequency    = in_array($unit, array('d', 'm', 'y')) ? $unit : 'm';
         $facturerec->auto_validate     = (int) $auto_validate;
@@ -160,8 +167,6 @@ class DoliRecurringApi extends DolibarrApi
         $facturerec->fk_account        = $facture->fk_account;
         $facturerec->note_public       = $facture->note_public;
         $facturerec->note_private      = $facture->note_private;
-        $facturerec->remise_absolue    = $facture->remise_absolue;
-        $facturerec->remise_percent    = $facture->remise_percent;
         $facturerec->model_pdf         = $facture->model_pdf;
 
         // Next execution date
@@ -172,34 +177,12 @@ class DoliRecurringApi extends DolibarrApi
             $facturerec->date_when = dol_time_plus_duree(dol_now(), $facturerec->frequency, $facturerec->unit_frequency);
         }
 
-        // Clone line items into FactureRecLigne
-        $facturerec->lines = array();
-        if (!empty($facture->lines)) {
-            foreach ($facture->lines as $line) {
-                $recLine = new FactureRecLigne($this->db);
-                $recLine->fk_product       = $line->fk_product;
-                $recLine->desc             = $line->desc;
-                $recLine->qty              = $line->qty;
-                $recLine->subprice         = $line->subprice;
-                $recLine->tva_tx           = $line->tva_tx;
-                $recLine->localtax1_tx     = $line->localtax1_tx;
-                $recLine->localtax2_tx     = $line->localtax2_tx;
-                $recLine->fk_remise_except = $line->fk_remise_except;
-                $recLine->remise_percent   = $line->remise_percent;
-                $recLine->product_type     = $line->product_type;
-                $recLine->info_bits        = $line->info_bits;
-                $recLine->special_code     = $line->special_code;
-                $recLine->rang             = $line->rang;
-                $facturerec->lines[]       = $recLine;
-            }
-        }
-
         // Copy extrafields (options_primary_representative, etc.)
         if (!empty($facture->array_options)) {
             $facturerec->array_options = $facture->array_options;
         }
 
-        $template_id = $facturerec->create(DolibarrApiAccess::$user);
+        $template_id = $facturerec->create(DolibarrApiAccess::$user, (int) $facture->id);
         if ($template_id <= 0) {
             throw new RestException(500, 'Failed to create recurring invoice template: ' . $facturerec->error);
         }
@@ -207,7 +190,7 @@ class DoliRecurringApi extends DolibarrApi
         return array(
             'success'        => true,
             'id'             => (int) $template_id,
-            'title'          => $facturerec->titre,
+            'title'          => $facturerec->title,
             'socid'          => (int) $facturerec->socid,
             'frequency'      => (int) $facturerec->frequency,
             'unit_frequency' => $facturerec->unit_frequency,
