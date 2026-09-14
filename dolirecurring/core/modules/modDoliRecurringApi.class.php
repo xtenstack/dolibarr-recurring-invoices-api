@@ -21,6 +21,13 @@ include_once DOL_DOCUMENT_ROOT . '/core/modules/DolibarrModules.class.php';
 
 /**
  * Descriptor class for DoliRecurringApi module
+ *
+ * Installed folder is custom/dolirecurring/, not custom/dolirecurringapi/:
+ * Dolibarr's REST router maps a module to its folder with
+ * getModuleDirForApiClass(), which strips a trailing "api" from the module
+ * name (dolirecurringapi -> dolirecurring) for both per-call requests and the
+ * API explorer. The module name, constant (MAIN_MODULE_DOLIRECURRINGAPI),
+ * rights and the /dolirecurringapi/... URLs are unchanged.
  */
 class modDoliRecurringApi extends DolibarrModules
 {
@@ -42,7 +49,7 @@ class modDoliRecurringApi extends DolibarrModules
         $this->description = "Provides REST API endpoints for creating and managing recurring invoice templates (FactureRec)";
         $this->editor_name = "XTen Stack";
         $this->editor_url = "https://xten.au";
-        $this->version = '1.0.2';
+        $this->version = '1.0.3';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'bill';
 
