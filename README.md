@@ -32,9 +32,9 @@ This module solves that gap by providing first-class REST API endpoints that plu
 ## Installation
 
 ### Method 1: Upload via Dolibarr Web Interface (Recommended)
-1. Build `dolirecurringapi-1.0.0.zip` with `scripts/package.sh` (Dolibarr's installer requires the `modulename-x.y.z.zip` name).
+1. Build `dolirecurringapi-1.0.1.zip` with `scripts/package.sh` (Dolibarr's installer requires the `modulename-x.y.z.zip` name).
 2. In Dolibarr, go to **Home → Setup → Modules/Applications → Deploy/install external module**.
-3. Upload `dolirecurringapi-1.0.0.zip` and click **Install**.
+3. Upload `dolirecurringapi-1.0.1.zip` and click **Install**.
 4. In the **Financial Modules** section, locate **DoliRecurringApi** and toggle it to **ON**.
 
 ### Method 2: Manual Installation via Filesystem / SSH

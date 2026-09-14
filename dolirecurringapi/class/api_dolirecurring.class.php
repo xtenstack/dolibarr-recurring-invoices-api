@@ -201,20 +201,16 @@ class DoliRecurringApi extends DolibarrApi
 }
 
 /**
- * Class aliases to ensure Restler router resolution under all conventions
+ * Alias for Dolibarr's per-call API router.
+ *
+ * For /api/index.php/dolirecurringapi/..., api/index.php strips the trailing
+ * "api" to find this file (class/api_dolirecurring.class.php), then looks for
+ * ucwords('dolirecurringapi') . 'Api' = DolirecurringapiApi. The API explorer
+ * derives "Dolirecurring" from the file name and looks for DolirecurringApi,
+ * which DoliRecurringApi above already is: PHP class names are
+ * case-insensitive, so declaring DolirecurringApi separately is a fatal
+ * "Cannot declare class" error.
  */
-class DolirecurringApi extends DoliRecurringApi
-{
-}
-
 class DolirecurringapiApi extends DoliRecurringApi
-{
-}
-
-class DoliRecurring extends DoliRecurringApi
-{
-}
-
-class Dolirecurring extends DoliRecurringApi
 {
 }

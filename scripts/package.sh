@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(dirname "$SCRIPT_DIR")"
-VERSION="1.0.0"
+VERSION="1.0.1"
 ZIP_NAME="dolirecurringapi-${VERSION}.zip"
 
 echo "==> Packaging Dolibarr Recurring Invoices API Module ($ZIP_NAME)..."
