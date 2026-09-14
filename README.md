@@ -24,7 +24,8 @@ This module solves that gap by providing first-class REST API endpoints that plu
 
 ## Compatibility
 
-- Checked against Dolibarr 23.0 source (the target install runs 23.0.3); older releases are supported via a fallback include path but untested
+- Checked against Dolibarr 23.0 and 24.0 source; older releases are supported via a fallback include path but untested
+- Dolibarr 23.0+ also has its own read-only `GET /invoices/templates` list with richer filters; this module's list endpoint is a simple equivalent, and its main addition is `create-from-invoice`
 - PHP 7.4, 8.0, 8.1, 8.2, 8.3+
 
 ---
@@ -32,9 +33,9 @@ This module solves that gap by providing first-class REST API endpoints that plu
 ## Installation
 
 ### Method 1: Upload via Dolibarr Web Interface (Recommended)
-1. Build `dolirecurringapi-1.0.1.zip` with `scripts/package.sh` (Dolibarr's installer requires the `modulename-x.y.z.zip` name).
+1. Build `dolirecurringapi-1.0.2.zip` with `scripts/package.sh` (Dolibarr's installer requires the `modulename-x.y.z.zip` name).
 2. In Dolibarr, go to **Home → Setup → Modules/Applications → Deploy/install external module**.
-3. Upload `dolirecurringapi-1.0.1.zip` and click **Install**.
+3. Upload `dolirecurringapi-1.0.2.zip` and click **Install**.
 4. In the **Financial Modules** section, locate **DoliRecurringApi** and toggle it to **ON**.
 
 ### Method 2: Manual Installation via Filesystem / SSH

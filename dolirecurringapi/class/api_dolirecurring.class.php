@@ -77,13 +77,34 @@ class DoliRecurringApi extends DolibarrApi
             throw new RestException(403, 'Permission denied: facture->lire required');
         }
 
-        $obj = new FactureRec($this->db);
-        $result = $obj->fetchAll($sortorder, $sortfield, (int) $limit, ((int) $page) * ((int) $limit));
-        if ($result < 0) {
-            throw new RestException(500, 'Failed to fetch templates: ' . $obj->error);
+        // FactureRec has no fetchAll() (checked in Dolibarr 23.0 and 24.0), so
+        // list the same way core's GET /invoices/templates does: select the
+        // template ids, then fetch each one.
+        $sql = "SELECT t.rowid";
+        $sql .= " FROM " . MAIN_DB_PREFIX . "facture_rec AS t";
+        $sql .= " WHERE t.entity IN (" . getEntity('invoice') . ")";
+        $sql .= $this->db->order($sortfield, $sortorder);
+        if ($limit) {
+            if ($page < 0) {
+                $page = 0;
+            }
+            $sql .= $this->db->plimit((int) $limit, (int) $limit * (int) $page);
         }
 
-        return $this->_cleanObjectDatas($obj->lines);
+        $resql = $this->db->query($sql);
+        if (!$resql) {
+            throw new RestException(503, 'Error when retrieving recurring invoice templates: ' . $this->db->lasterror());
+        }
+
+        $templates = array();
+        while ($row = $this->db->fetch_object($resql)) {
+            $template = new FactureRec($this->db);
+            if ($template->fetch((int) $row->rowid) > 0) {
+                $templates[] = $this->_cleanObjectDatas($template);
+            }
+        }
+
+        return $templates;
     }
 
     /**
