@@ -83,13 +83,14 @@ class DoliRecurringApi extends DolibarrApi
      * @param string $sortorder Sort order (default 'ASC') {@from query}
      * @param int    $limit     Number of records to return {@from query}
      * @param int    $page      Page index (starts at 0) {@from query}
+     * @param int    $source_invoice Only templates created from this invoice id (see create-from-invoice) {@from query}
      *
      * @url GET /templates
      *
      * @return array List of recurring templates
      * @throws RestException 403, 500
      */
-    public function getTemplates($sortfield = 't.rowid', $sortorder = 'ASC', $limit = 100, $page = 0)
+    public function getTemplates($sortfield = 't.rowid', $sortorder = 'ASC', $limit = 100, $page = 0, $source_invoice = 0)
     {
         if (!DolibarrApiAccess::$user->hasRight('facture', 'lire')) {
             throw new RestException(403, 'Permission denied: facture->lire required');
@@ -101,6 +102,11 @@ class DoliRecurringApi extends DolibarrApi
         $sql = "SELECT t.rowid";
         $sql .= " FROM " . MAIN_DB_PREFIX . "facture_rec AS t";
         $sql .= " WHERE t.entity IN (" . getEntity('invoice') . ")";
+        if ((int) $source_invoice > 0) {
+            // create-from-invoice stamps the source id into the template's
+            // private note (facture_rec has no column for it).
+            $sql .= " AND t.note_private LIKE '%" . $this->db->escape(self::sourceMarker((int) $source_invoice)) . "%'";
+        }
         $sql .= $this->db->order($sortfield, $sortorder);
         if ($limit) {
             if ($page < 0) {
@@ -194,6 +200,59 @@ class DoliRecurringApi extends DolibarrApi
     }
 
     /**
+     * Marker written into a template's private note by create-from-invoice.
+     *
+     * @param int $invoiceId Source invoice id
+     * @return string
+     */
+    private static function sourceMarker($invoiceId)
+    {
+        return '[source-invoice:' . (int) $invoiceId . ']';
+    }
+
+    /**
+     * Classify a validated, unpaid invoice as abandoned (Dolibarr's own
+     * "Classify abandoned" action, close code "abandon").
+     *
+     * Core's API can validate, set paid/unpaid and set back to draft, but has
+     * no route for abandoning. Needed for the recurring flow: a checkout that
+     * creates its invoice and template before payment must be able to
+     * withdraw both if the customer never pays.
+     *
+     * @param int    $id         Invoice id
+     * @param string $close_note Reason recorded on the invoice {@from body}
+     * @return array
+     *
+     * @url POST /invoices/{id}/abandon
+     *
+     * @throws RestException 400, 403, 404, 500
+     */
+    public function abandonInvoice($id, $close_note = '')
+    {
+        if (!DolibarrApiAccess::$user->hasRight('facture', 'creer')) {
+            throw new RestException(403, 'Permission denied: facture->creer required');
+        }
+
+        $facture = new Facture($this->db);
+        $result = $facture->fetch((int) $id);
+        if ($result <= 0) {
+            throw new RestException(404, 'Invoice not found: ' . $id);
+        }
+        if ((int) $facture->statut !== Facture::STATUS_VALIDATED) {
+            throw new RestException(400, 'Only a validated invoice can be abandoned (status is ' . $facture->statut . ')');
+        }
+        if (!empty($facture->paye)) {
+            throw new RestException(400, 'Invoice is already paid');
+        }
+
+        if ($facture->setCanceled(DolibarrApiAccess::$user, Facture::CLOSECODE_ABANDONED, (string) $close_note) <= 0) {
+            throw new RestException(500, 'Failed to abandon invoice: ' . $facture->error);
+        }
+
+        return array('success' => array('code' => 200, 'message' => 'Invoice ' . $facture->ref . ' classified abandoned'));
+    }
+
+    /**
      * Create a recurring invoice template from an existing invoice (draft or validated).
      *
      * Clones all header fields, line items, taxes, discounts, and extrafields into
@@ -208,6 +267,7 @@ class DoliRecurringApi extends DolibarrApi
      * @param string $date_when     First execution date (YYYY-MM-DD), default NOW + frequency {@from body}
      * @param int    $cond_reglement_id Payment term id for generated invoices; default: source invoice's, else the customer's default, else 1 (due upon receipt) {@from body}
      * @param int    $mode_reglement_id Payment mode id for generated invoices; default: source invoice's, else the customer's default {@from body}
+     * @param string $note_public   Public note for the template and every invoice generated from it; default: copied from the source invoice. Pass it when the source note carries something invoice-specific (a pay-online link for THAT invoice) that must not repeat on every recurrence {@from body}
      *
      * @url POST /from-invoice
      * @url POST /create-from-invoice
@@ -215,7 +275,7 @@ class DoliRecurringApi extends DolibarrApi
      * @return array Created template details including ID and next execution date
      * @throws RestException 400, 403, 404, 500
      */
-    public function createFromInvoice($invoice_id, $title = '', $frequency = 1, $unit = 'm', $auto_validate = 1, $nb_gen_max = 0, $date_when = '', $cond_reglement_id = 0, $mode_reglement_id = 0)
+    public function createFromInvoice($invoice_id, $title = '', $frequency = 1, $unit = 'm', $auto_validate = 1, $nb_gen_max = 0, $date_when = '', $cond_reglement_id = 0, $mode_reglement_id = 0, $note_public = null)
     {
         if (!DolibarrApiAccess::$user->hasRight('facture', 'creer')) {
             throw new RestException(403, 'Permission denied: facture->creer required');
@@ -256,8 +316,10 @@ class DoliRecurringApi extends DolibarrApi
         $facturerec->mode_reglement_id = (int) $mode_reglement_id > 0 ? (int) $mode_reglement_id
             : ((int) $facture->mode_reglement_id > 0 ? (int) $facture->mode_reglement_id : $thirdpartyMode);
         $facturerec->fk_account        = $facture->fk_account;
-        $facturerec->note_public       = $facture->note_public;
-        $facturerec->note_private      = $facture->note_private;
+        $facturerec->note_public       = $note_public !== null ? (string) $note_public : $facture->note_public;
+        // Link back to the source invoice so it can be found (and deleted)
+        // later: GET /templates?source_invoice=<id>.
+        $facturerec->note_private      = trim((string) $facture->note_private . "\n" . self::sourceMarker((int) $facture->id));
         $facturerec->model_pdf         = $facture->model_pdf;
 
         // Next execution date

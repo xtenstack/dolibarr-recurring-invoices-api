@@ -49,7 +49,7 @@ class modDoliRecurringApi extends DolibarrModules
         $this->description = "Provides REST API endpoints for creating and managing recurring invoice templates (FactureRec)";
         $this->editor_name = "XTen Stack";
         $this->editor_url = "https://xten.au";
-        $this->version = '1.0.4';
+        $this->version = '1.0.5';
         $this->const_name = 'MAIN_MODULE_' . strtoupper($this->name);
         $this->picto = 'bill';
 
