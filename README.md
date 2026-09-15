@@ -115,7 +115,19 @@ DELETE /api/index.php/dolirecurringapi/templates/{id}
 ```
 Requires `facture->supprimer`. Invoices already generated from the template are not touched.
 
-### 3. List Recurring Templates
+### 3. Abandon an Unpaid Invoice
+
+```
+POST /api/index.php/dolirecurringapi/invoices/{id}/abandon
+{ "close_note": "Unpaid after 7 days; withdrawn by Tim" }
+```
+Dolibarr's own "Classify abandoned" (close code `abandon`) for a validated, unpaid invoice. Core's API has no route for this. Requires `facture->creer`.
+
+### 4. List Recurring Templates
+
+`GET /templates?source_invoice=<id>` returns only templates created from that invoice (create-from-invoice stamps `[source-invoice:<id>]` into the template's private note).
+
+#### (details)
 
 ```http
 GET /api/index.php/dolirecurringapi/templates?limit=50&page=0
