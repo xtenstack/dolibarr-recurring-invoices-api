@@ -28,6 +28,24 @@ if (file_exists(DOL_DOCUMENT_ROOT . '/compta/facture/class/facture-rec.class.php
  * Exposes REST endpoints to create and manage recurring invoice templates
  * programmatically, filling a long-standing gap in Dolibarr's core REST API.
  *
+ * Restler reads THIS docblock (the one immediately above the class). The two
+ * annotations below are what make Dolibarr authenticate the call and populate
+ * DolibarrApiAccess::$user -- without them every method fatals with
+ * "Call to a member function hasRight() on null" (1.0.0-1.0.3 all lacked
+ * them; the routing 404 hid it until 1.0.4).
+ *
+ * Routing (1.0.4): api/index.php strips a trailing "api" from the URL segment
+ * to find custom/dolirecurring/class/api_dolirecurring.class.php, registers
+ * ucwords('dolirecurringapi') -- this class, case-insensitively -- and Restler
+ * prefixes the routes with the lower-cased class name it was given. So the
+ * live base path is /api/index.php/dolirecurringapi/... and this file must
+ * declare exactly ONE API class: the "DolirecurringapiApi" alias of 1.0.1-1.0.3
+ * won the class_exists($classname.'Api') check and was registered under the
+ * prefix "dolirecurringapiapi", so every real call 404'd ("Not Found") while
+ * the explorer, which registers by file name, still listed the routes.
+ *
+ * @access protected
+ * @class  DolibarrApiAccess {@requires user,external}
  * @smart-auto-routing false
  */
 class DoliRecurringApi extends DolibarrApi
@@ -125,14 +143,54 @@ class DoliRecurringApi extends DolibarrApi
 
         $obj = new FactureRec($this->db);
         $result = $obj->fetch((int) $id);
+        // FactureRec::fetch() returns -1 with "... not found" for a missing
+        // row (not 0), so map that to 404 and keep 500 for real DB errors.
+        if ($result <= 0 && ($result == 0 || stripos((string) $obj->error, 'not found') !== false)) {
+            throw new RestException(404, 'Recurring invoice template not found: ' . $id);
+        }
         if ($result < 0) {
             throw new RestException(500, 'Failed to fetch template: ' . $obj->error);
         }
-        if ($result == 0) {
-            throw new RestException(404, 'Recurring invoice template not found: ' . $id);
-        }
 
         return $this->_cleanObjectDatas($obj);
+    }
+
+    /**
+     * Delete a recurring invoice template.
+     *
+     * Dolibarr's core API can list templates (GET /invoices/templates) but
+     * cannot delete one; without this an API-created template can only be
+     * removed in the UI. Invoices already generated from it are untouched.
+     *
+     * @param int $id ID of the recurring invoice template
+     * @return array
+     *
+     * @url DELETE /templates/{id}
+     *
+     * @throws RestException 403, 404, 500
+     */
+    public function deleteTemplate($id)
+    {
+        if (!DolibarrApiAccess::$user->hasRight('facture', 'supprimer')) {
+            throw new RestException(403, 'Permission denied: facture->supprimer required');
+        }
+
+        $obj = new FactureRec($this->db);
+        $result = $obj->fetch((int) $id);
+        // FactureRec::fetch() returns -1 with "... not found" for a missing
+        // row (not 0), so map that to 404 and keep 500 for real DB errors.
+        if ($result <= 0 && ($result == 0 || stripos((string) $obj->error, 'not found') !== false)) {
+            throw new RestException(404, 'Recurring invoice template not found: ' . $id);
+        }
+        if ($result < 0) {
+            throw new RestException(500, 'Failed to fetch template: ' . $obj->error);
+        }
+
+        if ($obj->delete(DolibarrApiAccess::$user) <= 0) {
+            throw new RestException(500, 'Failed to delete recurring invoice template: ' . $obj->error);
+        }
+
+        return array('success' => array('code' => 200, 'message' => 'Recurring invoice template ' . $id . ' deleted'));
     }
 
     /**
@@ -148,6 +206,8 @@ class DoliRecurringApi extends DolibarrApi
      * @param int    $auto_validate 1 to auto-validate generated invoices, 0 for draft {@from body}
      * @param int    $nb_gen_max    Maximum number of generations (0 = unlimited) {@from body}
      * @param string $date_when     First execution date (YYYY-MM-DD), default NOW + frequency {@from body}
+     * @param int    $cond_reglement_id Payment term id for generated invoices; default: source invoice's, else the customer's default, else 1 (due upon receipt) {@from body}
+     * @param int    $mode_reglement_id Payment mode id for generated invoices; default: source invoice's, else the customer's default {@from body}
      *
      * @url POST /from-invoice
      * @url POST /create-from-invoice
@@ -155,7 +215,7 @@ class DoliRecurringApi extends DolibarrApi
      * @return array Created template details including ID and next execution date
      * @throws RestException 400, 403, 404, 500
      */
-    public function createFromInvoice($invoice_id, $title = '', $frequency = 1, $unit = 'm', $auto_validate = 1, $nb_gen_max = 0, $date_when = '')
+    public function createFromInvoice($invoice_id, $title = '', $frequency = 1, $unit = 'm', $auto_validate = 1, $nb_gen_max = 0, $date_when = '', $cond_reglement_id = 0, $mode_reglement_id = 0)
     {
         if (!DolibarrApiAccess::$user->hasRight('facture', 'creer')) {
             throw new RestException(403, 'Permission denied: facture->creer required');
@@ -183,8 +243,18 @@ class DoliRecurringApi extends DolibarrApi
         $facturerec->unit_frequency    = in_array($unit, array('d', 'm', 'y')) ? $unit : 'm';
         $facturerec->auto_validate     = (int) $auto_validate;
         $facturerec->nb_gen_max        = (int) $nb_gen_max;
-        $facturerec->cond_reglement_id = $facture->cond_reglement_id;
-        $facturerec->mode_reglement_id = $facture->mode_reglement_id;
+        // llx_facture_rec.fk_cond_reglement is NOT NULL, but an API-created
+        // source invoice often has no payment term (neither of XTen's own
+        // clients set one, and "Column 'fk_cond_reglement' cannot be null"
+        // was the live failure on 2026-09-15). Fall back: explicit parameter,
+        // source invoice, customer's default, then 1 = due upon receipt.
+        $facture->fetch_thirdparty();
+        $thirdpartyCond = !empty($facture->thirdparty->cond_reglement_id) ? (int) $facture->thirdparty->cond_reglement_id : 0;
+        $thirdpartyMode = !empty($facture->thirdparty->mode_reglement_id) ? (int) $facture->thirdparty->mode_reglement_id : 0;
+        $facturerec->cond_reglement_id = (int) $cond_reglement_id > 0 ? (int) $cond_reglement_id
+            : ((int) $facture->cond_reglement_id > 0 ? (int) $facture->cond_reglement_id : ($thirdpartyCond > 0 ? $thirdpartyCond : 1));
+        $facturerec->mode_reglement_id = (int) $mode_reglement_id > 0 ? (int) $mode_reglement_id
+            : ((int) $facture->mode_reglement_id > 0 ? (int) $facture->mode_reglement_id : $thirdpartyMode);
         $facturerec->fk_account        = $facture->fk_account;
         $facturerec->note_public       = $facture->note_public;
         $facturerec->note_private      = $facture->note_private;
@@ -219,19 +289,4 @@ class DoliRecurringApi extends DolibarrApi
             'date_when'      => dol_print_date($facturerec->date_when, 'day'),
         );
     }
-}
-
-/**
- * Alias for Dolibarr's per-call API router.
- *
- * For /api/index.php/dolirecurringapi/..., api/index.php strips the trailing
- * "api" to find this file (class/api_dolirecurring.class.php), then looks for
- * ucwords('dolirecurringapi') . 'Api' = DolirecurringapiApi. The API explorer
- * derives "Dolirecurring" from the file name and looks for DolirecurringApi,
- * which DoliRecurringApi above already is: PHP class names are
- * case-insensitive, so declaring DolirecurringApi separately is a fatal
- * "Cannot declare class" error.
- */
-class DolirecurringapiApi extends DoliRecurringApi
-{
 }

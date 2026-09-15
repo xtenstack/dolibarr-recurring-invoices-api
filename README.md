@@ -108,7 +108,14 @@ Content-Type: application/json
 
 ---
 
-### 2. List Recurring Templates
+### 2. Delete a Recurring Template
+
+```
+DELETE /api/index.php/dolirecurringapi/templates/{id}
+```
+Requires `facture->supprimer`. Invoices already generated from the template are not touched.
+
+### 3. List Recurring Templates
 
 ```http
 GET /api/index.php/dolirecurringapi/templates?limit=50&page=0
