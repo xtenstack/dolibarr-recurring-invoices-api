@@ -91,6 +91,32 @@ Content-Type: application/json
 | `auto_validate` | `int` | No | `1` to automatically validate generated recurring invoices, `0` for draft status. Default `1`. |
 | `nb_gen_max` | `int` | No | Maximum number of generations (`0` for unlimited). Default `0`. |
 | `date_when` | `string` | No | Date of first recurring execution (`YYYY-MM-DD`). Default: current date + frequency. |
+| `lines` | `array` | No | **1.0.6.** Replacement lines for the template. When given, the lines copied from the source invoice are replaced by these, so the recurring charge can differ from the first invoice (an introductory price, a first period covered by a voucher). See below. |
+
+##### `lines` (1.0.6)
+
+```json
+{
+  "invoice_id": 20,
+  "lines": [
+    { "fk_product": 29, "qty": 1, "subprice": 150 },
+    { "desc": "Setup follow-up", "qty": 2, "subprice": 5, "tva_tx": 10 }
+  ]
+}
+```
+
+| Field | Required | Description |
+| :--- | :--- | :--- |
+| `qty` | **Yes** | Greater than 0. |
+| `subprice` | **Yes** | Unit price excluding tax; cannot be negative. |
+| `fk_product` | One of `fk_product` / `desc` | Product id. An unknown id is refused. |
+| `desc` | One of `fk_product` / `desc` | Line description. |
+| `tva_tx` | Only without `fk_product` | Tax rate. Default: the source invoice line with the same product, else the product's own rate. |
+| `remise_percent` | No | 0 to 100. |
+| `product_type` | No | 0 product, 1 service. Default: the product's type, else 0. |
+| `label` | No | Custom label. |
+
+The lines are validated before anything is written (a bad line is a `400`), and the template and its lines are created in one transaction: if a line cannot be added, no template is left behind. The response adds `lines_replaced`, `total_ht` and `total_ttc`. Omitting `lines` behaves exactly as 1.0.5.
 
 #### Response (`200 OK`)
 ```json

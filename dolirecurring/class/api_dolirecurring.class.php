@@ -268,6 +268,7 @@ class DoliRecurringApi extends DolibarrApi
      * @param int    $cond_reglement_id Payment term id for generated invoices; default: source invoice's, else the customer's default, else 1 (due upon receipt) {@from body}
      * @param int    $mode_reglement_id Payment mode id for generated invoices; default: source invoice's, else the customer's default {@from body}
      * @param string $note_public   Public note for the template and every invoice generated from it; default: copied from the source invoice. Pass it when the source note carries something invoice-specific (a pay-online link for THAT invoice) that must not repeat on every recurrence {@from body}
+     * @param array  $lines         Optional replacement lines for the template (1.0.6). When given, the lines copied from the source invoice are replaced by these, so the recurring charge can differ from the first invoice (an introductory price, a first month covered by a voucher). Each line: qty and subprice (unit price excluding tax) are required; fk_product, desc, tva_tx, remise_percent, product_type and label are optional. tva_tx defaults to the source line with the same fk_product, else the product's own rate; a line with neither fk_product nor tva_tx is refused {@from body}
      *
      * @url POST /from-invoice
      * @url POST /create-from-invoice
@@ -275,7 +276,7 @@ class DoliRecurringApi extends DolibarrApi
      * @return array Created template details including ID and next execution date
      * @throws RestException 400, 403, 404, 500
      */
-    public function createFromInvoice($invoice_id, $title = '', $frequency = 1, $unit = 'm', $auto_validate = 1, $nb_gen_max = 0, $date_when = '', $cond_reglement_id = 0, $mode_reglement_id = 0, $note_public = null)
+    public function createFromInvoice($invoice_id, $title = '', $frequency = 1, $unit = 'm', $auto_validate = 1, $nb_gen_max = 0, $date_when = '', $cond_reglement_id = 0, $mode_reglement_id = 0, $note_public = null, $lines = array())
     {
         if (!DolibarrApiAccess::$user->hasRight('facture', 'creer')) {
             throw new RestException(403, 'Permission denied: facture->creer required');
@@ -290,6 +291,10 @@ class DoliRecurringApi extends DolibarrApi
         if ($result <= 0) {
             throw new RestException(404, 'Source invoice not found: ' . $invoice_id);
         }
+
+        // Checked before anything is written, so a bad line is a 400 and
+        // not a half-made template.
+        $newLines = $this->normaliseLines($lines, $facture);
 
         $facturerec = new FactureRec($this->db);
 
@@ -335,10 +340,29 @@ class DoliRecurringApi extends DolibarrApi
             $facturerec->array_options = $facture->array_options;
         }
 
+        // One transaction around the create and the line replacement: a
+        // template must never be left holding the source invoice's prices
+        // when the caller asked for different ones.
+        $this->db->begin();
+
         $template_id = $facturerec->create(DolibarrApiAccess::$user, (int) $facture->id);
         if ($template_id <= 0) {
+            $this->db->rollback();
             throw new RestException(500, 'Failed to create recurring invoice template: ' . $facturerec->error);
         }
+
+        if (!empty($newLines)) {
+            $error = $this->replaceLines((int) $template_id, $newLines);
+            if ($error !== '') {
+                $this->db->rollback();
+                throw new RestException(500, 'Failed to set the template lines, nothing was created: ' . $error);
+            }
+        }
+
+        $this->db->commit();
+
+        $created = new FactureRec($this->db);
+        $created->fetch((int) $template_id);
 
         return array(
             'success'        => true,
@@ -349,6 +373,148 @@ class DoliRecurringApi extends DolibarrApi
             'unit_frequency' => $facturerec->unit_frequency,
             'auto_validate'  => (int) $facturerec->auto_validate,
             'date_when'      => dol_print_date($facturerec->date_when, 'day'),
+            'lines_replaced' => !empty($newLines),
+            'total_ht'       => (float) $created->total_ht,
+            'total_ttc'      => (float) $created->total_ttc,
         );
+    }
+
+    /**
+     * Validate the optional replacement lines and fill each line's tax
+     * rate. Returns an empty array when none were given.
+     *
+     * @param mixed   $lines   The request's lines value
+     * @param Facture $facture Source invoice (its lines supply default tax rates)
+     * @return array<int, array<string, mixed>>
+     * @throws RestException 400
+     */
+    private function normaliseLines($lines, $facture)
+    {
+        if (empty($lines)) {
+            return array();
+        }
+
+        if (!is_array($lines)) {
+            throw new RestException(400, 'lines must be an array of line objects');
+        }
+
+        if (empty($facture->lines)) {
+            $facture->fetch_lines();
+        }
+
+        $sourceRates = array();
+        foreach ((array) $facture->lines as $sourceLine) {
+            if (!empty($sourceLine->fk_product) && !isset($sourceRates[(int) $sourceLine->fk_product])) {
+                $sourceRates[(int) $sourceLine->fk_product] = (float) $sourceLine->tva_tx;
+            }
+        }
+
+        $out = array();
+        foreach (array_values($lines) as $i => $line) {
+            $n    = $i + 1;
+            $line = (array) $line;
+
+            if (!isset($line['qty']) || !is_numeric($line['qty']) || (float) $line['qty'] <= 0) {
+                throw new RestException(400, "lines[$n]: qty is required and must be greater than 0");
+            }
+            if (!isset($line['subprice']) || !is_numeric($line['subprice']) || (float) $line['subprice'] < 0) {
+                throw new RestException(400, "lines[$n]: subprice (unit price excluding tax) is required and cannot be negative");
+            }
+            if (isset($line['remise_percent']) && (!is_numeric($line['remise_percent']) || (float) $line['remise_percent'] < 0 || (float) $line['remise_percent'] > 100)) {
+                throw new RestException(400, "lines[$n]: remise_percent must be between 0 and 100");
+            }
+
+            $fkProduct = !empty($line['fk_product']) ? (int) $line['fk_product'] : 0;
+            $desc      = isset($line['desc']) ? trim((string) $line['desc']) : '';
+            $label     = isset($line['label']) ? trim((string) $line['label']) : '';
+            $type      = isset($line['product_type']) ? (int) $line['product_type'] : 0;
+            $rate      = null;
+
+            if ($fkProduct > 0) {
+                require_once DOL_DOCUMENT_ROOT . '/product/class/product.class.php';
+                $product = new Product($this->db);
+                if ($product->fetch($fkProduct) <= 0) {
+                    throw new RestException(400, "lines[$n]: product $fkProduct not found");
+                }
+                if (!isset($line['product_type'])) {
+                    $type = (int) $product->type;
+                }
+                $rate = isset($sourceRates[$fkProduct]) ? $sourceRates[$fkProduct] : (float) $product->tva_tx;
+            } elseif ($desc === '') {
+                throw new RestException(400, "lines[$n]: give fk_product or desc");
+            }
+
+            if (isset($line['tva_tx'])) {
+                if (!is_numeric($line['tva_tx']) || (float) $line['tva_tx'] < 0) {
+                    throw new RestException(400, "lines[$n]: tva_tx must be a number");
+                }
+                $rate = (float) $line['tva_tx'];
+            }
+            if ($rate === null) {
+                throw new RestException(400, "lines[$n]: tva_tx is required on a line without fk_product");
+            }
+
+            $out[] = array(
+                'fk_product'     => $fkProduct,
+                'desc'           => $desc,
+                'label'          => $label,
+                'qty'            => (float) $line['qty'],
+                'subprice'       => (float) $line['subprice'],
+                'tva_tx'         => $rate,
+                'remise_percent' => isset($line['remise_percent']) ? (float) $line['remise_percent'] : 0,
+                'product_type'   => $type,
+            );
+        }
+
+        return $out;
+    }
+
+    /**
+     * Replace a template's lines. The caller owns the transaction.
+     *
+     * @param int                              $templateId Template id
+     * @param array<int, array<string, mixed>> $newLines   From normaliseLines()
+     * @return string Empty on success, else what failed
+     */
+    private function replaceLines($templateId, array $newLines)
+    {
+        $template = new FactureRec($this->db);
+        if ($template->fetch($templateId) <= 0) {
+            return 'template ' . $templateId . ' could not be read back: ' . $template->error;
+        }
+        $template->fetch_thirdparty();
+
+        foreach ((array) $template->lines as $copied) {
+            if ($copied->delete(DolibarrApiAccess::$user) < 0) {
+                return 'a copied line could not be removed: ' . implode('; ', (array) $copied->errors);
+            }
+        }
+        $template->lines = array();
+
+        foreach ($newLines as $rang => $line) {
+            $result = $template->addline(
+                $line['desc'],
+                $line['subprice'],
+                $line['qty'],
+                $line['tva_tx'],
+                0,
+                0,
+                $line['fk_product'],
+                $line['remise_percent'],
+                'HT',
+                0,
+                0,
+                0,
+                $line['product_type'],
+                $rang + 1,
+                0,
+                $line['label']
+            );
+            if ($result <= 0) {
+                return 'line ' . ($rang + 1) . ' could not be added: ' . $template->error;
+            }
+        }
+
+        return '';
     }
 }
